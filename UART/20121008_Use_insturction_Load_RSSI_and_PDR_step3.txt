@@ -1,0 +1,526 @@
+
+/*----------------------------------------------------------------------------
+ *  Demo Application for SimpliciTI
+ *
+ *  L. Friedman
+ *  Texas Instruments, Inc.
+ *----------------------------------------------------------------------------
+ */
+/******************************************************************************************
+
+  Copyright 2007-2009 Texas Instruments Incorporated. All rights reserved.
+
+  IMPORTANT: Your use of this Software is limited to those specific rights granted under
+  the terms of a software license agreement between the user who downloaded the software,
+  his/her employer (which must be your employer) and Texas Instruments Incorporated (the
+  "License"). You may not use this Software unless you agree to abide by the terms of the
+  License. The License limits your use, and you acknowledge, that the Software may not be
+  modified, copied or distributed unless embedded on a Texas Instruments microcontroller
+  or used solely and exclusively in conjunction with a Texas Instruments radio frequency
+  transceiver, which is integrated into your product. Other than for the foregoing purpose,
+  you may not use, reproduce, copy, prepare derivative works of, modify, distribute,
+  perform, display or sell this Software and/or its documentation for any purpose.
+
+  YOU FURTHER ACKNOWLEDGE AND AGREE THAT THE SOFTWARE AND DOCUMENTATION ARE PROVIDED “AS IS?  WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION, ANY
+  WARRANTY OF MERCHANTABILITY, TITLE, NON-INFRINGEMENT AND FITNESS FOR A PARTICULAR PURPOSE.
+  IN NO EVENT SHALL TEXAS INSTRUMENTS OR ITS LICENSORS BE LIABLE OR OBLIGATED UNDER CONTRACT,
+  NEGLIGENCE, STRICT LIABILITY, CONTRIBUTION, BREACH OF WARRANTY, OR OTHER LEGAL EQUITABLE
+  THEORY ANY DIRECT OR INDIRECT DAMAGES OR EXPENSES INCLUDING BUT NOT LIMITED TO ANY
+  INCIDENTAL, SPECIAL, INDIRECT, PUNITIVE OR CONSEQUENTIAL DAMAGES, LOST PROFITS OR LOST
+  DATA, COST OF PROCUREMENT OF SUBSTITUTE GOODS, TECHNOLOGY, SERVICES, OR ANY CLAIMS BY
+  THIRD PARTIES (INCLUDING BUT NOT LIMITED TO ANY DEFENSE THEREOF), OR OTHER SIMILAR COSTS.
+
+  Should you have any questions regarding your right to use this Software,
+  contact Texas Instruments Incorporated at www.TI.com.
+**************************************************************************************************/
+#define INDICATOR_TIME_OUT 250;
+
+#include <stdio.h>
+#include "bsp.h"
+#include "mrfi.h"
+#include "nwk_types.h"
+#include "nwk_api.h"
+#include "nwk_pll.h"
+#include "bsp_leds.h"
+#ifdef MRFI_CC430
+  #include "uart_intfc_cc430.h"
+#else
+  #include "uart_intfc.h"
+#endif
+
+
+
+//static int8_t  sSample;
+static void itoa(int n,unsigned char s[]);
+static void itoa_int16(int16_t n,unsigned char s[]);
+static void reverse(unsigned char s[]);
+size_t strlen(const unsigned char * str);
+size_t strlen_b(const signed char * str);
+
+
+smplStatus_t setPowerMode(uint8_t level);
+uint8_t ASCII_to_int(uint8_t ascii_vaule);
+int8_t link_transmit(int16_t transmit_delay,int16_t total,linkID_t Link_id);
+
+void setMonitorInital(void);
+int monitor(void);
+
+
+const int DEVICE_TYPE_LINK = 0;
+const int DEVICE_TYPE_LISTEN = 1;
+
+
+void main1 (void);
+
+void main (void)
+{
+  /*instruction*/
+  //e.g "cg-1-0105"   PowerMode = 1(0~2) ,TransmitDelay = 105ms(0~9999)
+  
+  
+  main1();
+}
+
+void main1 (void)
+{
+  /* holds length of current message */
+  uint8_t len; 
+  
+  /* the link token */
+  linkID_t LinkID = 0;
+  
+  /* the transmit and receive buffers */
+  uint8_t rx[MAX_APP_PAYLOAD], tx[MAX_APP_PAYLOAD];
+
+
+  /* holds led indicator time out counts */
+  uint16_t led_tmr;
+  /*Device type*/
+  int8_t device_type=-1;
+
+  
+  
+  /*tmp_No*/
+  //int8_t No_link =0;
+  int16_t No_listen =0;
+  int16_t No_listen_new =0;
+  
+  
+  /*input vaule*/
+  int16_t total_NO=10;//maximum = 32767
+  uint8_t string[10];//ch-1-00100
+  int8_t len_tmp =0;
+  int8_t result_display = 0;//0=not Display ,1= Displayed
+  int8_t instruction_size = 9;//e.g cg-1-0105   PowerMode = 1(0~2) ,TransmitDelay = 105ms(0~9999)
+  int16_t transmit_packet_delay=30;    
+  
+
+  
+  BSP_Init( );
+
+  SMPL_Init( NULL );
+  
+  uart_intfc_init( );
+
+  /* turn on the radio so we are always able to receive data asynchronously */
+  SMPL_Ioctl( IOCTL_OBJ_RADIO, IOCTL_ACT_RADIO_RXON, NULL );
+  
+  /* turn on LED. */
+  BSP_TURN_ON_LED1( );
+  setMonitorInital();
+
+#ifdef  LINK_TO
+  {
+    uint8_t cnt = 0;
+    tx_send_wait( "Linking to...\r\n", 15 );
+    while (SMPL_SUCCESS != SMPL_Link(&LinkID))
+      if( cnt++ == 0 )
+      {
+        /* blink LED until we link successfully */
+        BSP_TOGGLE_LED1( );
+      }
+    device_type=DEVICE_TYPE_LINK;
+  }
+#else // ifdef LINK_LISTEN
+  tx_send_wait( "Listening for Link...\r\n", 23 );
+  while (SMPL_SUCCESS != SMPL_LinkListen(&LinkID))
+  {
+    /* blink LED until we link successfully */
+    BSP_TOGGLE_LED1( );
+  }
+  device_type=DEVICE_TYPE_LISTEN;
+#endif
+
+  tx_send_wait( "Link Established!\r\nReady...\r\n", 29 );
+  
+  /* turn off the led */
+  BSP_TURN_OFF_LED1( );
+  
+  
+    
+  main_loop:
+    /* Check to see if we received any characters from the other radio
+     * and if we have send them out the uart and reset indicator timeout.
+     * Prioritize on radio received links as that buffer is the most time
+     * critical with respect to the UART buffers.
+     */
+    if( SMPL_Receive( LinkID, tx, &len ) == SMPL_SUCCESS )
+    {
+      /* blocking call but should be ok if both ends have same uart buad rate */
+      //tx_send_wait( tx, len );
+      led_tmr = INDICATOR_TIME_OUT;   /* update activity time out */
+      
+        
+        /*Link receive
+        if(device_type==DEVICE_TYPE_LINK){//LinkTo
+          
+          if(No_link>tx[0]){
+            No_link=No_link+1;//because packet first NO. is 0;
+            No_link=No_link*10/total_NO*10;
+            
+            //display link PDR
+            tx_send_wait( "PDR: ", sizeof("PDR: ") );
+            MRFI_DelayMs( 10 );        
+            unsigned char number[10];
+            itoa(No_link,number);
+            tx_send_wait(&number, strlen(number));         
+            MRFI_DelayMs( 10 );
+            tx_send_wait( "\r\n", sizeof("\r\n") ); 
+            
+          }
+            
+          
+          
+          No_link = tx[0];
+          
+          //display link rssi
+          unsigned char rssi_char_listen[10];
+          int8_t rssi_int_listen = tx[0];
+          itoa(rssi_int_listen,rssi_char_listen);
+          tx_send_wait(&rssi_char_listen, strlen(rssi_char_listen));
+          MRFI_DelayMs( 10 );
+          tx_send_wait( " ", sizeof(" ") );
+          
+          ioctlRadioSiginfo_t sigInfo1;
+          sigInfo1.lid=LinkID;
+          SMPL_Ioctl(IOCTL_OBJ_RADIO, IOCTL_ACT_RADIO_SIGINFO, (void *)&sigInfo1);
+          
+          unsigned char rssi_char_link[10];
+          int8_t rssi_int_link = sigInfo1.sigInfo.rssi;
+          itoa(rssi_int_link,rssi_char_link);
+          tx_send_wait(&rssi_char_link, strlen(rssi_char_link));
+          MRFI_DelayMs( 10 );
+          tx_send_wait( "\r\n", sizeof("\r\n") );
+          
+          
+        }else
+        */
+        //Listen receive
+        if(device_type==DEVICE_TYPE_LISTEN){//Listen
+          No_listen_new =tx[2];
+          No_listen_new =No_listen_new<<8;
+          No_listen_new =No_listen_new +tx[1];
+          
+          
+          if(No_listen>No_listen_new && result_display==0){
+            No_listen_new=No_listen_new+1;//because packet first NO. is 0;
+            No_listen_new=No_listen_new*10/total_NO*10;
+            tx_send_wait( "PDR: ", sizeof("PDR: ") );
+            MRFI_DelayMs( 10 );
+            unsigned char number[10];
+            itoa_int16(No_listen,number);
+            tx_send_wait(&number, strlen(number));         
+            MRFI_DelayMs( 10 );
+            tx_send_wait( "\r\n", sizeof("\r\n") );    
+            result_display=1;
+          }else{
+            result_display=0;
+          }
+          No_listen=No_listen_new;
+          
+          unsigned char count_char[10];
+          itoa_int16(No_listen,count_char);
+          tx_send_wait(&count_char, strlen(count_char));
+          MRFI_DelayMs( 10 );
+          tx_send_wait( " ", sizeof(" ") );
+          
+          ioctlRadioSiginfo_t sigInfo1;
+          sigInfo1.lid=LinkID;
+          SMPL_Ioctl(IOCTL_OBJ_RADIO, IOCTL_ACT_RADIO_SIGINFO, (void *)&sigInfo1);
+          
+          unsigned char rssi_char_link[10];
+          int8_t rssi_int_link = sigInfo1.sigInfo.rssi;
+          itoa(rssi_int_link,rssi_char_link);
+          tx_send_wait(&rssi_char_link, strlen(rssi_char_link));         
+          MRFI_DelayMs( 10 );
+          tx_send_wait( "\r\n", sizeof("\r\n") );
+          
+          
+          if(No_listen_new==total_NO-1){
+            No_listen_new=No_listen_new+1;//because packet first NO. is 0;
+            No_listen_new=No_listen_new*10/total_NO*10;
+            tx_send_wait( "PDR: ", sizeof("PDR: ") );
+            MRFI_DelayMs( 10 );
+            unsigned char number[10];
+            itoa_int16(No_listen_new,number);
+            tx_send_wait(&number, strlen(number));         
+            MRFI_DelayMs( 10 );
+            tx_send_wait( "\r\n", sizeof("\r\n") );    
+            result_display=1;
+          }
+          
+          
+          /*transmit 
+          uint8_t  msg[1];
+
+          msg[0]=tx[1];         
+          SMPL_Send(LinkID, msg, sizeof(msg));
+          */          
+          
+        }
+      
+    }
+    
+
+    
+    
+    if(device_type==DEVICE_TYPE_LINK){
+      FHSS_ACTIVE( if( nwk_pllBackgrounder( false ) != false ) );
+      {
+        /* check to see if the host has sent any characters and if it has
+         * then send them over the radio link and reset indicator timeout.
+        */
+        len = rx_receive( rx, MAX_APP_PAYLOAD );
+        if( len != 0 )
+        {
+        
+          for(int i=0;i<len;i++){
+            string[len_tmp+i]=ASCII_to_int(rx[i]);
+          }
+          len_tmp = len_tmp+len;
+          
+          if(len_tmp==instruction_size){
+            len_tmp = 0;
+            if(string[0]==0x63&&string[1]==0x67&&string[2]==0x2D&&string[4]==0x2D){//=cg- -
+              uint8_t power = string[3];
+              /*this function is fail,because PowerMode vaule always error.
+              if(setPowerMode(power) == SMPL_SUCCESS){
+                tx_send_wait("setPower_Success\r\n", sizeof("setPower_Success\r\n"));
+                MRFI_DelayMs( 20 );                
+              }else{
+                tx_send_wait("setPower_Fail\r\n", sizeof("setPower_Fail\r\n"));
+                MRFI_DelayMs( 20 );
+              };
+              */
+              if(power<3){
+                MRFI_SetRFPwr(power);
+                tx_send_wait("setPower_Success\r\n", sizeof("setPower_Success\r\n"));
+                MRFI_DelayMs( 20 );
+              }else{
+                tx_send_wait("setPower_Fail\r\n", sizeof("setPower_Fail\r\n"));
+                MRFI_DelayMs( 20 );
+              }
+              
+              
+              uint16_t thousand = string[5];
+                thousand=thousand*1000;
+              uint16_t hundred = string[6];
+                hundred =hundred*100;
+              uint16_t ten = string[7];
+                ten=ten*10;
+              uint16_t digit = string[8];
+                transmit_packet_delay=thousand+hundred+ten+digit;              
+              
+              
+              tx_send_wait("Action_Start\r\n", sizeof("Action_Start\r\n"));
+              MRFI_DelayMs( 20 );
+              
+              if(link_transmit(transmit_packet_delay,total_NO,LinkID)==1){
+                tx_send_wait("Action_Finish\r\n\r\n", sizeof("Action_Finish\r\n\r\n"));
+                MRFI_DelayMs( 20 );
+              }else{
+                tx_send_wait("Action_Fail\r\n\r\n", sizeof("Action_Fail\r\n\r\n"));
+                MRFI_DelayMs( 20 );
+              };
+              
+            }else{
+              tx_send_wait("input error\r\n\r\n", sizeof("input error\r\n\r\n"));
+            }
+          
+        }        
+        led_tmr = INDICATOR_TIME_OUT;   /* update activity time out */
+        
+
+
+        /* By forcing a minimum delay between transmissions we guarantee
+        * a window for receiving packets.  This is necessary as the radio
+        * link is half duplex while the UART is full duplex.  Without this
+        * delay mechanism, packets can get lost as both ends may attempt to
+        * transmit at the same time which the CCA algorithm fails to handle.
+        */
+        MRFI_DelayMs( 5 );
+        }
+      }
+    }
+ 
+    /* manage led indicator */
+    if( led_tmr != 0 )
+    {
+      led_tmr--;
+      BSP_TURN_ON_LED1( );
+    }
+    else
+      BSP_TURN_OFF_LED1( );
+
+    
+    goto main_loop; /* do it again and again and again and ... */
+    
+
+}
+    void setMonitorInital(void){
+      T1CC0L = 31250 & 0xFF;            //±N50000§C8¦ì¤¸¼g¤J T1CC0L       
+      T1CC0H = ((31250 & 0xFF00) >> 8);// ±N50000°ª8¦ì¤¸¼g¤J T1CC0H  
+    
+      T1CTL = 0x0F;                    //¤ÀÀW128¦¸  ±Ä¥ÎUP-DOWN­p¼Æ¤è¦¡ //p118
+    }
+
+
+    int monitor(void){
+      if((T1STAT & 0x20) == 0x20){  // µ¥«Ý©w®É®É¶¡¨ì¡]·¸¥X¼Ð»x¬°1¡^
+        T1STAT &= ~0x20;              // ²M¹s·¸¥X¼Ð»x
+        return 1;
+      }else{
+        return 0;
+      }
+    }    
+
+    //link transmit
+    int8_t link_transmit(int16_t transmit_delay,int16_t total,linkID_t Link_id){
+      /*start*/
+      int16_t count = 0;
+      for(count=0;count<total;count++){
+        uint8_t  msg[10];
+        msg[1]=count;//low bit
+        msg[2]=count>>8;//high bit
+      
+        SMPL_Send(Link_id, msg, sizeof(msg));
+
+        MRFI_DelayMs(transmit_delay);
+      }
+      return 1;
+    }
+
+    smplStatus_t setPowerMode(uint8_t level)
+    {
+      //ioctlLevel_t PowerLevel;
+      uint8_t PowerLevel;
+      //PowerLevel=level;
+      switch(level){
+        case 0:
+          PowerLevel=IOCTL_LEVEL_0;
+          return SMPL_Ioctl( IOCTL_OBJ_RADIO, IOCTL_ACT_RADIO_SETPWR, &PowerLevel);          
+        case 1:
+          PowerLevel=IOCTL_LEVEL_1;
+          return SMPL_Ioctl( IOCTL_OBJ_RADIO, IOCTL_ACT_RADIO_SETPWR, &PowerLevel);                   
+        case 2:
+          PowerLevel=IOCTL_LEVEL_2;
+          return SMPL_Ioctl( IOCTL_OBJ_RADIO, IOCTL_ACT_RADIO_SETPWR, &PowerLevel);        
+        default:
+          return SMPL_BAD_PARAM;
+      }
+    }
+
+
+
+    /*ASCII_to_int*/
+    uint8_t ASCII_to_int(uint8_t ascii_vaule)
+    {
+      switch(ascii_vaule){
+        case 0x30:
+          return 0;
+        case 0x31:
+          return 1;                   
+        case 0x32:
+          return 2;
+        case 0x33:
+          return 3;
+        case 0x34:
+          return 4;
+        case 0x35:
+          return 5;                   
+        case 0x36:
+          return 6;
+        case 0x37:
+          return 7;
+        case 0x38:
+          return 8;
+        case 0x39:
+          return 9;          
+        default:
+          return ascii_vaule;
+      }
+      
+    }
+
+
+
+    /* itoa:  convert n to characters in s */
+    static void itoa(int n,unsigned char s[])
+    {
+      int i, sign;
+ 
+      if ((sign = n) < 0)  /* record sign */
+         n = -n;          /* make n positive */
+      i = 0;
+      do {       /* generate digits in reverse order */
+         s[i++] = n % 10 + '0';   /* get next digit */
+      } while ((n /= 10) > 0);     /* delete it */
+       if (sign < 0)
+         s[i++] = '-';
+      s[i] = '\0';
+      reverse(s);
+    }
+    /* itoa:  convert n to characters in s */
+    static void itoa_int16(int16_t n,unsigned char s[])
+    {
+      int16_t i, sign;
+ 
+      if ((sign = n) < 0)  /* record sign */
+         n = -n;          /* make n positive */
+      i = 0;
+      do {       /* generate digits in reverse order */
+         s[i++] = n % 10 + '0';   /* get next digit */
+      } while ((n /= 10) > 0);     /* delete it */
+       if (sign < 0)
+         s[i++] = '-';
+      s[i] = '\0';
+      reverse(s);
+    }
+     /* reverse:  reverse string s in place */
+    static void reverse(unsigned char s[])
+    {
+      int i, j;
+      unsigned char c;
+ 
+      for (i = 0, j = strlen(s)-1; i<j; i++, j--) {
+         c = s[i];
+         s[i] = s[j];
+         s[j] = c;
+      }
+    }
+
+    /*Too time-consuming*/
+    size_t strlen(const unsigned char * str) {
+      const unsigned char *cp =  str;
+      while (*cp++ );
+      return (cp - str - 1 );
+    }
+    /*Too time-consuming*/
+    size_t strlen_b(const signed char * str) {
+      const signed char *cp =  str;
+      while (*cp++ );
+      return (cp - str - 1 );
+    } 
+
+
+

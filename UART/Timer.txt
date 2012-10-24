@@ -1,0 +1,21 @@
+//Timer Function
+void delay(int n)
+{
+  int i;
+ 
+  CLKCONCMD = 0x08;      //tick speed 16 MHz ; system clock XOSC 32MHz
+
+  
+  //delay time = 0.5*(n+1)
+  for(i=0;i<=n;i++)
+  {    
+  //T1CC0 = T1CC0H:T1CCOL
+  T1CC0L = 31250 & 0xFF;            //將50000低8位元寫入 T1CC0L       
+  T1CC0H = ((31250 & 0xFF00) >> 8);// 將50000高8位元寫入 T1CC0H  
+    
+  T1CTL = 0x0F;                    //分頻128次  採用UP-DOWN計數方式 
+  while((T1STAT & 0x20) == 0);  // 等待定時時間到（溢出標誌為1）
+  T1STAT &= ~0x20;              // 清零溢出標誌
+  }
+  
+}
